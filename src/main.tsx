@@ -201,6 +201,14 @@ function stepsToBlocks(steps: AgentStep[], models: Model[]): AgentBlock[] {
   ]);
 }
 
+function renderHighlightedVariables(content: string) {
+  return content.split(/(\{\{\s*[A-Za-z_][A-Za-z0-9_]*\s*\}\})/g).map((part, index) =>
+    /^\{\{\s*[A-Za-z_][A-Za-z0-9_]*\s*\}\}$/.test(part)
+      ? <span className="variable-token" key={`${part}-${index}`}>{part}</span>
+      : <React.Fragment key={`${part}-${index}`}>{part}</React.Fragment>
+  );
+}
+
 function Login({ onDone }: { onDone: (user: User) => void }) {
   const [username, setUsername] = useState("IHD2025");
   const [password, setPassword] = useState("15658855442");
@@ -746,29 +754,32 @@ function AgentBuilder({
                   >
                     <GripVertical size={16} />
                   </button>
-                  <textarea
-                    className="doc-textarea"
-                    value={block.content}
-                    onChange={(event) => {
-                      updateBlock(block.id, { content: event.target.value });
-                      if (!event.target.value.endsWith("/") && !event.target.value.endsWith("@")) setCommandMenu(null);
-                    }}
-                    onBlur={() => window.setTimeout(() => setCommandMenu(null), 140)}
-                    onKeyUp={(event) => {
-                      const value = event.currentTarget.value;
-                      if (value.endsWith("/") || value.endsWith("@")) {
-                        const rect = event.currentTarget.getBoundingClientRect();
-                        setCommandMenu({
-                          blockId: block.id,
-                          kind: value.endsWith("/") ? "slash" : "mention",
-                          top: rect.bottom + window.scrollY - 4,
-                          left: rect.left + window.scrollX + 12
-                        });
-                      }
-                    }}
-                    rows={Math.max(3, block.content.split("\n").length + 1)}
-                    placeholder="直接写提示词。输入 / 插入模型，输入 @ 引用上方变量。"
-                  />
+                  <div className="doc-text-shell">
+                    <pre className="doc-highlight" aria-hidden="true">{renderHighlightedVariables(block.content)}</pre>
+                    <textarea
+                      className="doc-textarea"
+                      value={block.content}
+                      onChange={(event) => {
+                        updateBlock(block.id, { content: event.target.value });
+                        if (!event.target.value.endsWith("/") && !event.target.value.endsWith("@")) setCommandMenu(null);
+                      }}
+                      onBlur={() => window.setTimeout(() => setCommandMenu(null), 140)}
+                      onKeyUp={(event) => {
+                        const value = event.currentTarget.value;
+                        if (value.endsWith("/") || value.endsWith("@")) {
+                          const rect = event.currentTarget.getBoundingClientRect();
+                          setCommandMenu({
+                            blockId: block.id,
+                            kind: value.endsWith("/") ? "slash" : "mention",
+                            top: rect.bottom + window.scrollY - 4,
+                            left: rect.left + window.scrollX + 12
+                          });
+                        }
+                      }}
+                      rows={Math.max(3, block.content.split("\n").length + 1)}
+                      placeholder="直接写提示词。输入 / 插入模型，输入 @ 引用上方变量。"
+                    />
+                  </div>
                   <button className="doc-remove" type="button" onClick={() => removeBlock(block.id)} title="删除文本块"><Trash2 size={14} /></button>
                   {commandMenu?.blockId === block.id ? (
                     <div className="slash-menu" style={{ top: commandMenu.top, left: commandMenu.left }}>
@@ -1159,13 +1170,26 @@ function PublicAgentPage({ shareId }: { shareId: string }) {
   const [content, setContent] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(false);
+  const [waitIndex, setWaitIndex] = useState(0);
   const [error, setError] = useState("");
+  const waitMessages = [
+    "AI疯狂翻书中 (ง •̀_•́)ง",
+    "AI也会摸鱼哦 (￣▽￣)~*",
+    "什么？刚睡醒，等我找找 (。-ω-)zzz",
+    "答案正在路上 ( •̀ ω •́ )✧"
+  ];
 
   useEffect(() => {
     api<{ agent: { shareId: string; name: string; description: string } }>(`/api/public/agents/${shareId}`)
       .then((result) => setAgent(result.agent))
       .catch((err) => setError(err.message));
   }, [shareId]);
+
+  useEffect(() => {
+    if (!loading) return;
+    const timer = window.setInterval(() => setWaitIndex((index) => index + 1), 1200);
+    return () => window.clearInterval(timer);
+  }, [loading]);
 
   async function send(event: FormEvent) {
     event.preventDefault();
@@ -1209,7 +1233,7 @@ function PublicAgentPage({ shareId }: { shareId: string }) {
               </div>
             </article>
           )) : <div className="empty-state"><Sparkles size={44} /><h2>开始使用这个智能体</h2></div>}
-          {loading ? <div className="typing">正在运行智能体</div> : null}
+          {loading ? <div className="typing">{waitMessages[waitIndex % waitMessages.length]}</div> : null}
         </div>
         <form className="composer" onSubmit={send}>
           {error ? <div className="error">{error}</div> : null}

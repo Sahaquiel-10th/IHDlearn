@@ -957,6 +957,12 @@ pre {
   opacity: 0.45;
 }
 
+.doc-text-shell {
+  position: relative;
+  min-width: 0;
+}
+
+.doc-highlight,
 .doc-textarea {
   min-height: 118px;
   max-height: none;
@@ -964,6 +970,36 @@ pre {
   background: transparent;
   line-height: 1.72;
   padding-right: 42px;
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.doc-highlight {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 11px 54px 11px 12px;
+  color: #18212f;
+}
+
+.variable-token {
+  color: #1d4ed8;
+  background: #dbeafe;
+  border-radius: 4px;
+  padding: 1px 2px;
+  font-weight: 650;
+}
+
+.doc-textarea {
+  position: relative;
+  color: transparent;
+  caret-color: #18212f;
+}
+
+.doc-textarea::placeholder {
+  color: #667085;
 }
 
 .doc-textarea:focus {

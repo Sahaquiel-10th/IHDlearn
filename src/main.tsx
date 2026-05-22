@@ -123,13 +123,21 @@ type Session = {
   updatedAt: string;
 };
 
-type PreviewTrace = {
-  blockId: string;
-  modelId: string;
-  variableName: string;
-  content: string;
-  imageUrl?: string;
-};
+type PreviewTrace =
+  | {
+      type: "text";
+      blockId: string;
+      content: string;
+      renderedContent: string;
+    }
+  | {
+      type: "model";
+      blockId: string;
+      modelId: string;
+      variableName: string;
+      content: string;
+      imageUrl?: string;
+    };
 
 const tokenKey = "enterprise-ai-token";
 
@@ -668,7 +676,7 @@ function AgentBuilder({
         method: "POST",
         body: JSON.stringify({ ...form, content: previewInput || "请用一句话测试这个智能体。" })
       });
-      setPreviewResult(result.reply);
+      setPreviewResult("");
       setPreviewTrace(result.trace || []);
     } catch (err) {
       setPreviewResult(err instanceof Error ? err.message : "试运行失败");
@@ -861,22 +869,29 @@ function AgentBuilder({
               {previewTrace.length ? (
                 <div className="preview-trace">
                   {previewTrace.map((item, index) => (
-                    <article className="preview-node" key={`${item.blockId}-${index}`}>
-                      <div className="step-head">
-                        <strong>模型输出 {index + 1}</strong>
-                        <code>{`{{${item.variableName}}}`}</code>
-                      </div>
-                      <div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]}>{item.content}</ReactMarkdown></div>
+                    <article className={`preview-node ${item.type}`} key={`${item.blockId}-${index}`}>
+                      {item.type === "text" ? (
+                        <>
+                          <div className="step-head">
+                            <strong>文本块</strong>
+                            <span>传给下一个模型块的提示词</span>
+                          </div>
+                          <pre>{item.renderedContent || item.content || "空文本块"}</pre>
+                        </>
+                      ) : (
+                        <>
+                          <div className="step-head">
+                            <strong>模型输出</strong>
+                            <code>{`{{${item.variableName}}}`}</code>
+                          </div>
+                          <div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]}>{item.content}</ReactMarkdown></div>
+                        </>
+                      )}
                     </article>
                   ))}
                 </div>
               ) : null}
-              {previewResult ? (
-                <div className="preview-output final-output">
-                  <strong>最终输出</strong>
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{previewResult}</ReactMarkdown>
-                </div>
-              ) : null}
+              {previewResult ? <div className="preview-output"><ReactMarkdown remarkPlugins={[remarkGfm]}>{previewResult}</ReactMarkdown></div> : null}
             </div>
           </aside>
         </div>

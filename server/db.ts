@@ -209,6 +209,14 @@ function migrateDatabase(db: Database): boolean {
       changed = true;
     }
   }
+  const autoRestoredDefaults = new Set(["claude4.7", "gpt5.5", "gpt-image-2"]);
+  const beforeModelCount = db.models.length;
+  db.models = db.models.filter((model) => {
+    if (model.enabled || model.apiKey) return true;
+    return !(model.provider === "yylx" && autoRestoredDefaults.has(model.model));
+  });
+  if (db.models.length !== beforeModelCount) changed = true;
+
   for (const token of db.integrationTokens) {
     if (!token.token) changed = true;
   }
@@ -236,45 +244,6 @@ function migrateDatabase(db: Database): boolean {
           title: `模型步骤 ${index + 1}`
         }
       ]);
-      changed = true;
-    }
-  }
-  const defaults: Array<Omit<ModelConfig, "id" | "createdAt">> = [
-    {
-      name: "Claude 4.7",
-      provider: "yylx",
-      kind: "chat",
-      baseUrl: "https://app.yylx.io/v1",
-      apiKey: yylxApiKey,
-      model: "claude4.7",
-      systemPrompt: "",
-      enabled: Boolean(yylxApiKey)
-    },
-    {
-      name: "GPT 5.5",
-      provider: "yylx",
-      kind: "chat",
-      baseUrl: "https://app.yylx.io/v1",
-      apiKey: yylxApiKey,
-      model: "gpt5.5",
-      systemPrompt: "",
-      enabled: Boolean(yylxApiKey)
-    },
-    {
-      name: "Image 2",
-      provider: "yylx",
-      kind: "image",
-      baseUrl: "https://app.yylx.io/v1",
-      apiKey: yylxApiKey,
-      model: "gpt-image-2",
-      systemPrompt: "",
-      enabled: Boolean(yylxApiKey)
-    }
-  ];
-
-  for (const item of defaults) {
-    if (!db.models.some((model) => model.provider === "yylx" && model.model === item.model)) {
-      db.models.push({ ...item, id: uid("mdl"), createdAt: now() });
       changed = true;
     }
   }

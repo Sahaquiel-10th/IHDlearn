@@ -1264,6 +1264,17 @@ pre {
   background: #fbf8ff;
 }
 
+.preview-node.text {
+  border-left-color: var(--ihd-yellow);
+  background: #fffdf4;
+}
+
+.preview-node pre {
+  margin-top: 8px;
+  color: #4d415f;
+  line-height: 1.65;
+}
+
 .final-output {
   display: grid;
   gap: 8px;

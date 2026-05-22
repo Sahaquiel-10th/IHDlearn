@@ -1,27 +1,30 @@
-import React, { FormEvent, useEffect, useMemo, useState } from "react";
+import React, { FormEvent, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  Archive,
   Bot,
   Copy,
   Edit3,
   Eye,
   EyeOff,
-  Folder,
   KeyRound,
+  Link,
   LogOut,
-  MoreHorizontal,
   MessageSquare,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plus,
   Save,
   Send,
   Settings,
   Shield,
+  Sparkles,
+  GripVertical,
   Trash2,
   UserPlus,
-  Users
+  Users,
+  Workflow
 } from "lucide-react";
 import "./styles.css";
 
@@ -57,23 +60,44 @@ type Message = {
   modelId?: string;
 };
 
-type Conversation = {
-  id: string;
-  userId: string;
-  modelId: string;
-  workspaceId?: string;
-  archived: boolean;
-  title: string;
-  messages: Message[];
-  createdAt: string;
-  updatedAt: string;
-};
-
 type Workspace = {
   id: string;
   userId: string;
   name: string;
   createdAt: string;
+};
+
+type AgentStep = {
+  id: string;
+  prompt: string;
+  modelId: string;
+};
+
+type AgentBlock =
+  | {
+      id: string;
+      type: "text";
+      content: string;
+    }
+  | {
+      id: string;
+      type: "model";
+      modelId: string;
+      variableName: string;
+      title: string;
+    };
+
+type Agent = {
+  id: string;
+  userId: string;
+  shareId: string;
+  name: string;
+  description: string;
+  steps: AgentStep[];
+  blocks: AgentBlock[];
+  published: boolean;
+  createdAt: string;
+  updatedAt: string;
 };
 
 type IntegrationToken = {
@@ -86,6 +110,25 @@ type IntegrationToken = {
 
 type SystemSettings = {
   safetyRules: string;
+};
+
+type Session = {
+  id: string;
+  title: string;
+  kind: "chat" | "agent";
+  modelId?: string;
+  agentId?: string;
+  messages: Message[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+type PreviewTrace = {
+  blockId: string;
+  modelId: string;
+  variableName: string;
+  content: string;
+  imageUrl?: string;
 };
 
 const tokenKey = "enterprise-ai-token";
@@ -122,9 +165,37 @@ function titleFrom(content: string) {
   return content.replace(/\s+/g, " ").slice(0, 32) || "新对话";
 }
 
+function emptyTextBlock(content = ""): AgentBlock {
+  return { id: localId("blk"), type: "text", content };
+}
+
+function emptyModelBlock(models: Model[], index = 1): AgentBlock {
+  return {
+    id: localId("blk"),
+    type: "model",
+    modelId: models.find((model) => model.kind === "chat")?.id || models[0]?.id || "",
+    variableName: `output_${index}`,
+    title: `模型步骤 ${index}`
+  };
+}
+
+function stepsToBlocks(steps: AgentStep[], models: Model[]): AgentBlock[] {
+  if (!steps.length) return [emptyTextBlock(), emptyModelBlock(models, 1)];
+  return steps.flatMap((step, index) => [
+    emptyTextBlock(step.prompt),
+    {
+      id: step.id || localId("blk"),
+      type: "model" as const,
+      modelId: step.modelId,
+      variableName: `output_${index + 1}`,
+      title: `模型步骤 ${index + 1}`
+    }
+  ]);
+}
+
 function Login({ onDone }: { onDone: (user: User) => void }) {
-  const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("admin123");
+  const [username, setUsername] = useState("IHD2025");
+  const [password, setPassword] = useState("15658855442");
   const [error, setError] = useState("");
 
   async function submit(event: FormEvent) {
@@ -146,10 +217,10 @@ function Login({ onDone }: { onDone: (user: User) => void }) {
     <main className="login-shell">
       <form className="login-panel" onSubmit={submit}>
         <div className="brand-row">
-          <Shield size={28} />
+          <img className="brand-logo" src="/ihd-logo.png" alt="IHD" />
           <div>
-            <h1>企业 AI 工作台</h1>
-            <p>统一接入多个外部大模型，内部账号登录使用。</p>
+            <h1>I have a demo</h1>
+            <p>内部多模型智能体训练平台</p>
           </div>
         </div>
         <label>
@@ -158,18 +229,10 @@ function Login({ onDone }: { onDone: (user: User) => void }) {
         </label>
         <label>
           密码
-          <input
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            type="password"
-            autoComplete="current-password"
-          />
+          <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" autoComplete="current-password" />
         </label>
         {error ? <div className="error">{error}</div> : null}
-        <button className="primary" type="submit">
-          <KeyRound size={18} />
-          登录
-        </button>
+        <button className="primary" type="submit"><KeyRound size={18} />登录</button>
       </form>
     </main>
   );
@@ -177,36 +240,25 @@ function Login({ onDone }: { onDone: (user: User) => void }) {
 
 function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   const [models, setModels] = useState<Model[]>([]);
-  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [agents, setAgents] = useState<Agent[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
-  const [activeId, setActiveId] = useState<string>("");
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [activeId, setActiveId] = useState("");
   const [draftModelId, setDraftModelId] = useState("");
-  const [draftWorkspaceId, setDraftWorkspaceId] = useState("");
   const [content, setContent] = useState("");
-  const [loadingByConversation, setLoadingByConversation] = useState<Record<string, boolean>>({});
+  const [loading, setLoading] = useState<Record<string, boolean>>({});
   const [error, setError] = useState("");
-  const [view, setView] = useState<"chat" | "admin">("chat");
-  const [showArchived, setShowArchived] = useState(false);
+  const [view, setView] = useState<"chat" | "builder" | "admin">("chat");
+  const [editingAgentId, setEditingAgentId] = useState("");
   const [isComposing, setIsComposing] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [waitIndex, setWaitIndex] = useState(0);
 
-  const active = useMemo(() => conversations.find((item) => item.id === activeId), [activeId, conversations]);
+  const active = sessions.find((item) => item.id === activeId);
+  const activeAgent = active?.agentId ? agents.find((agent) => agent.id === active.agentId) : undefined;
   const activeModelId = active?.modelId || draftModelId;
-  const activeLoadingKey = active?.id || "draft";
-  const activeLoading = Boolean(loadingByConversation[activeLoadingKey]);
-  const currentModel = models.find((model) => model.id === activeModelId);
-  const visibleConversations = conversations.filter((conversation) => conversation.archived === showArchived);
-  const groupedConversations = useMemo(
-    () => [
-      { id: "", name: "未分组", conversations: visibleConversations.filter((conversation) => !conversation.workspaceId) },
-      ...workspaces.map((workspace) => ({
-        id: workspace.id,
-        name: workspace.name,
-        conversations: visibleConversations.filter((conversation) => conversation.workspaceId === workspace.id)
-      }))
-    ].filter((group) => group.conversations.length || (!group.id && !workspaces.length)),
-    [visibleConversations, workspaces]
-  );
+  const activeLoading = Boolean(loading[active?.id || "draft"]);
+  const visibleAgents = agents.filter((agent) => agent.published);
   const waitMessages = [
     "AI疯狂翻书中 (ง •̀_•́)ง",
     "AI也会摸鱼哦 (￣▽￣)~*",
@@ -215,13 +267,13 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   ];
 
   async function refresh() {
-    const [modelResult, conversationResult, workspaceResult] = await Promise.all([
+    const [modelResult, agentResult, workspaceResult] = await Promise.all([
       api<{ models: Model[] }>("/api/models"),
-      api<{ conversations: Conversation[] }>("/api/conversations"),
+      api<{ agents: Agent[] }>("/api/agents"),
       api<{ workspaces: Workspace[] }>("/api/workspaces")
     ]);
     setModels(modelResult.models);
-    setConversations(conversationResult.conversations);
+    setAgents(agentResult.agents);
     setWorkspaces(workspaceResult.workspaces);
     setDraftModelId((current) => (modelResult.models.some((model) => model.id === current) ? current : modelResult.models[0]?.id || ""));
   }
@@ -231,69 +283,97 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   }, []);
 
   useEffect(() => {
-    const hasLoading = Object.values(loadingByConversation).some(Boolean);
-    if (!hasLoading) return;
-    const timer = window.setInterval(() => setWaitIndex((index) => index + 1), 1400);
+    if (!Object.values(loading).some(Boolean)) return;
+    const timer = window.setInterval(() => setWaitIndex((index) => index + 1), 1200);
     return () => window.clearInterval(timer);
-  }, [loadingByConversation]);
+  }, [loading]);
+
+  function startNewChat() {
+    setActiveId("");
+    setView("chat");
+    setContent("");
+    setError("");
+  }
+
+  function openAgent(agent: Agent) {
+    const createdAt = new Date().toISOString();
+    const existing = sessions.find((session) => session.kind === "agent" && session.agentId === agent.id);
+    if (existing) {
+      setActiveId(existing.id);
+    } else {
+      const session: Session = {
+        id: localId("ses"),
+        title: agent.name,
+        kind: "agent",
+        agentId: agent.id,
+        messages: [],
+        createdAt,
+        updatedAt: createdAt
+      };
+      setSessions((items) => [session, ...items]);
+      setActiveId(session.id);
+    }
+    setView("chat");
+    setError("");
+  }
 
   async function send(event: FormEvent) {
     event.preventDefault();
+    const text = content.trim();
+    if (!text || activeLoading) return;
+    const createdAt = new Date().toISOString();
+    const isAgentSession = active?.kind === "agent";
     const modelId = active?.modelId || draftModelId;
-    if (!content.trim() || !modelId) return;
-    const isNewConversation = !active;
-    const tempId = isNewConversation ? localId("tmp") : "";
-    const loadingKey = active?.id || tempId;
-    if (loadingByConversation[loadingKey]) return;
-    setLoadingByConversation((items) => ({ ...items, [loadingKey]: true }));
-    setError("");
-    const text = content;
-    const userMessage: Message = {
-      role: "user",
-      content: text,
-      modelId,
-      createdAt: new Date().toISOString()
-    };
+    if (!isAgentSession && !modelId) return;
+    if (isAgentSession && !active.agentId) return;
+
+    const sessionId = active?.id || localId("ses");
+    const userMessage: Message = { role: "user", content: text, modelId, createdAt };
     setContent("");
-    if (isNewConversation) {
-      const optimistic: Conversation = {
-        id: tempId,
-        userId: user.id,
-        modelId,
-        workspaceId: draftWorkspaceId || undefined,
-        archived: false,
+    setError("");
+    setLoading((items) => ({ ...items, [sessionId]: true }));
+
+    if (!active) {
+      const optimistic: Session = {
+        id: sessionId,
         title: titleFrom(text),
+        kind: "chat",
+        modelId,
         messages: [userMessage],
-        createdAt: userMessage.createdAt,
-        updatedAt: userMessage.createdAt
+        createdAt,
+        updatedAt: createdAt
       };
-      setConversations((items) => [optimistic, ...items]);
-      setActiveId(tempId);
+      setSessions((items) => [optimistic, ...items]);
+      setActiveId(sessionId);
     } else {
-      setConversations((items) =>
-        items.map((item) =>
-          item.id === active.id
-            ? { ...item, messages: [...item.messages, userMessage], updatedAt: userMessage.createdAt }
-            : item
-        )
+      setSessions((items) =>
+        items.map((item) => item.id === active.id ? { ...item, messages: [...item.messages, userMessage], updatedAt: createdAt } : item)
       );
     }
+
     try {
-      const result = await api<{ conversation: Conversation }>("/api/chat", {
-        method: "POST",
-        body: JSON.stringify({ content: text, modelId, conversationId: isNewConversation ? "" : active.id, workspaceId: draftWorkspaceId })
-      });
-      setConversations((items) => {
-        const rest = items.filter((item) => item.id !== result.conversation.id && item.id !== tempId);
-        return [result.conversation, ...rest];
-      });
-      setActiveId((current) => (current === tempId || current === active?.id ? result.conversation.id : current));
+      let assistantMessage: Message;
+      if (isAgentSession) {
+        const response = await api<{ reply: string; imageUrl?: string }>(`/api/agents/${active!.agentId}/chat`, {
+          method: "POST",
+          body: JSON.stringify({ content: text })
+        });
+        assistantMessage = { role: "assistant", content: response.reply, imageUrl: response.imageUrl, createdAt: new Date().toISOString() };
+      } else {
+        const response = await api<{ message: Message }>("/api/chat", {
+          method: "POST",
+          body: JSON.stringify({ content: text, modelId })
+        });
+        assistantMessage = response.message;
+      }
+      setSessions((items) =>
+        items.map((item) => item.id === sessionId ? { ...item, messages: [...item.messages, assistantMessage], updatedAt: assistantMessage.createdAt } : item)
+      );
     } catch (err) {
       setContent(text);
-      if (tempId) setConversations((items) => items.filter((item) => item.id !== tempId));
       setError(err instanceof Error ? err.message : "发送失败");
     } finally {
-      setLoadingByConversation((items) => ({ ...items, [loadingKey]: false }));
+      setLoading((items) => ({ ...items, [sessionId]: false }));
     }
   }
 
@@ -304,244 +384,539 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
     }
   }
 
-  async function archiveConversation(conversation: Conversation) {
-    const result = await api<{ conversation: Conversation }>(`/api/conversations/${conversation.id}`, {
-      method: "PATCH",
-      body: JSON.stringify({ archived: !conversation.archived })
-    });
-    setConversations((items) => items.map((item) => (item.id === conversation.id ? result.conversation : item)));
-    if (activeId === conversation.id && !showArchived) setActiveId("");
+  async function copyMarkdown(value: string) {
+    await navigator.clipboard.writeText(value);
   }
 
-  async function deleteConversation(conversation: Conversation) {
-    if (!confirm(`确认删除对话「${conversation.title}」？`)) return;
-    await api(`/api/conversations/${conversation.id}`, { method: "DELETE" });
-    setConversations((items) => items.filter((item) => item.id !== conversation.id));
-    if (activeId === conversation.id) setActiveId("");
-  }
-
-  async function moveConversation(conversation: Conversation, workspaceId: string) {
-    const result = await api<{ conversation: Conversation }>(`/api/conversations/${conversation.id}`, {
-      method: "PATCH",
-      body: JSON.stringify({ workspaceId })
-    });
-    setConversations((items) => items.map((item) => (item.id === conversation.id ? result.conversation : item)));
-  }
-
-  async function createWorkspace() {
-    const name = prompt("工作空间名称");
-    if (!name?.trim()) return;
-    const result = await api<{ workspace: Workspace }>("/api/workspaces", {
-      method: "POST",
-      body: JSON.stringify({ name: name.trim() })
-    });
-    setWorkspaces((items) => [...items, result.workspace]);
-    setDraftWorkspaceId(result.workspace.id);
-  }
-
-  async function moveConversationWithPrompt(conversation: Conversation) {
-    const options = ["未分组", ...workspaces.map((workspace) => workspace.name)].join("\n");
-    const name = prompt(`移动到哪个工作空间？\n${options}`);
-    if (name === null) return;
-    const targetName = name.trim();
-    const workspace = workspaces.find((item) => item.name === targetName);
-    if (targetName && !workspace) {
-      alert("没有找到这个工作空间，请先新建。");
-      return;
-    }
-    await moveConversation(conversation, workspace?.id || "");
-  }
-
-  async function copyMarkdown(content: string) {
-    await navigator.clipboard.writeText(content);
+  function deleteSession(session: Session) {
+    setSessions((items) => items.filter((item) => item.id !== session.id));
+    if (activeId === session.id) setActiveId("");
   }
 
   return (
-    <main className="app-shell">
-      <aside className="sidebar">
+    <main className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
+      <aside className={`sidebar ${sidebarCollapsed ? "collapsed" : ""}`}>
         <div className="side-top">
           <div className="product">
-            <Bot size={24} />
-            <span>企业 AI</span>
+            <img className="product-logo" src="/ihd-logo.png" alt="IHD" />
+            <span>IHD</span>
           </div>
           <button
-            className="icon-btn"
-            title="新对话"
-            onClick={() => {
-              setActiveId("");
-              setContent("");
-              setError("");
-              setView("chat");
-            }}
+            className="icon-btn sidebar-toggle"
+            title={sidebarCollapsed ? "展开侧边栏" : "收起侧边栏"}
+            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
           >
-            <Plus size={18} />
+            {sidebarCollapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
           </button>
+          <button className="icon-btn" title="新对话" onClick={startNewChat}><Plus size={18} /></button>
         </div>
-        <button className={`nav-item ${!activeId && view === "chat" ? "active" : ""}`} onClick={() => { setActiveId(""); setView("chat"); }}>
-          <MessageSquare size={17} />
-          新聊天
+        <button className={`nav-item ${!activeId && view === "chat" ? "active" : ""}`} onClick={startNewChat}>
+          <MessageSquare size={17} /><span>新聊天</span>
+        </button>
+        <button className={`nav-item ${view === "builder" ? "active" : ""}`} onClick={() => { setView("builder"); setActiveId(""); }}>
+          <Workflow size={17} /><span>构建智能体</span>
         </button>
         {user.role === "admin" ? (
-          <button className={`nav-item ${view === "admin" ? "active" : ""}`} onClick={() => setView("admin")}>
-            <Settings size={16} />
-            管理后台
+          <button className={`nav-item ${view === "admin" ? "active" : ""}`} onClick={() => { setView("admin"); setActiveId(""); }}>
+            <Settings size={16} /><span>管理后台</span>
           </button>
         ) : null}
+
         <div className="sidebar-section">
-          <div className="section-title">
-            <span>工作空间</span>
-            <button className="section-icon" title="新建工作空间" onClick={createWorkspace}><Plus size={14} /></button>
+          <div className="section-title"><span>智能体</span><Sparkles size={14} /></div>
+          <div className="conversation-list compact">
+            {visibleAgents.length ? visibleAgents.map((agent) => (
+              <button className={`conversation ${active?.agentId === agent.id ? "active" : ""}`} key={agent.id} onClick={() => openAgent(agent)}>
+                <Bot size={16} /><span>{agent.name}</span>
+              </button>
+            )) : <p className="sidebar-empty">还没有发布的智能体</p>}
           </div>
         </div>
-        <div className="conversation-list">
-          {groupedConversations.map((group) => (
-            <div className="workspace-group" key={group.id || "default"}>
-              <div className="workspace-name"><Folder size={13} />{group.name}</div>
-              {group.conversations.map((conversation) => (
-                <div className={`conversation-row ${conversation.id === activeId ? "active" : ""}`} key={conversation.id}>
-                  <button
-                    className="conversation-main"
-                    onClick={() => {
-                      setActiveId(conversation.id);
-                      setView("chat");
-                      setError("");
-                    }}
-                  >
-                    <MessageSquare size={16} />
-                    <span>{conversation.title}</span>
-                  </button>
-                  <button className="icon-inline" title="移动" onClick={() => moveConversationWithPrompt(conversation)}>
-                    <MoreHorizontal size={14} />
-                  </button>
-                  <button className="icon-inline" title={conversation.archived ? "取消归档" : "归档"} onClick={() => archiveConversation(conversation)}>
-                    <Archive size={14} />
-                  </button>
-                  <button className="icon-inline danger-inline" title="删除" onClick={() => deleteConversation(conversation)}>
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          ))}
+
+        <div className="sidebar-section">
+          <div className="section-title"><span>对话</span><span>{sessions.length}</span></div>
+          <div className="conversation-list">
+            {sessions.map((session) => (
+              <div className={`conversation-row ${session.id === activeId ? "active" : ""}`} key={session.id}>
+                <button className="conversation-main" onClick={() => { setActiveId(session.id); setView("chat"); }}>
+                  {session.kind === "agent" ? <Bot size={16} /> : <MessageSquare size={16} />}
+                  <span>{session.title}</span>
+                </button>
+                <button className="icon-inline danger-inline" title="清除" onClick={() => deleteSession(session)}><Trash2 size={14} /></button>
+              </div>
+            ))}
+          </div>
         </div>
+
         <div className="side-bottom">
-          <button className="nav-item" onClick={() => setShowArchived(!showArchived)}>
-            <Archive size={16} />
-            {showArchived ? "未归档对话" : "归档对话"}
-          </button>
-          <button className="ghost" onClick={onLogout}>
-            <LogOut size={17} />
-            退出
-          </button>
+          <button className="ghost" onClick={onLogout}><LogOut size={17} /><span>退出</span></button>
         </div>
       </aside>
 
       {view === "admin" && user.role === "admin" ? (
         <AdminPanel refreshModels={refresh} />
+      ) : view === "builder" ? (
+        <AgentBuilder
+          models={models}
+          agents={agents}
+          editingAgentId={editingAgentId}
+          setEditingAgentId={setEditingAgentId}
+          reload={refresh}
+        />
       ) : (
-      <section className="chat">
-        <header className="chat-header">
-          <div className="chat-title">
-            <strong>{active?.title || "新对话"}</strong>
-            <span>{user.username}</span>
-          </div>
-          <div className="chat-controls">
-          {!active ? (
-            <select value={draftWorkspaceId} onChange={(event) => setDraftWorkspaceId(event.target.value)}>
-              <option value="">未分组</option>
-              {workspaces.map((workspace) => (
-                <option key={workspace.id} value={workspace.id}>{workspace.name}</option>
-              ))}
-            </select>
-          ) : null}
-          <select value={activeModelId} onChange={(event) => setDraftModelId(event.target.value)} disabled={Boolean(active)}>
-            {models.length ? null : <option>暂无可用模型</option>}
-            {models.map((model) => (
-              <option key={model.id} value={model.id}>
-                {model.kind === "image" ? "图片" : "聊天"} · {model.name} · {model.model}
-              </option>
-            ))}
-          </select>
-          </div>
-        </header>
-
-        <div className="messages">
-          {(active?.messages ?? []).length ? (
-            active!.messages.map((message, index) => (
+        <section className="chat">
+          <header className="chat-header">
+            <div className="chat-title">
+              <strong>{activeAgent?.name || active?.title || "新对话"}</strong>
+              <span>{activeAgent ? "智能体运行模式" : "不保存后台聊天记录"}</span>
+            </div>
+            <div className="chat-controls">
+              {!active || active.kind === "chat" ? (
+                <select value={activeModelId} onChange={(event) => setDraftModelId(event.target.value)} disabled={Boolean(active)}>
+                  {models.length ? null : <option>暂无可用模型</option>}
+                  {models.map((model) => (
+                    <option key={model.id} value={model.id}>{model.kind === "image" ? "图片" : "聊天"} · {model.name} · {model.model}</option>
+                  ))}
+                </select>
+              ) : null}
+            </div>
+          </header>
+          <div className="messages">
+            {(active?.messages ?? []).length ? active!.messages.map((message, index) => (
               <article key={`${message.createdAt}-${index}`} className={`message ${message.role}`}>
-                <div className="avatar">{message.role === "user" ? user.username.slice(0, 1).toUpperCase() : "AI"}</div>
+                <div className="avatar">{message.role === "user" ? user.username.slice(0, 1).toUpperCase() : "IHD"}</div>
                 <div className="bubble">
                   {message.role === "assistant" ? (
                     <>
-                      <div className="markdown-body">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
-                      </div>
-                      <button className="copy-message" onClick={() => copyMarkdown(message.content)}>
-                        <Copy size={14} />
-                      </button>
+                      <div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown></div>
+                      <button className="copy-message" onClick={() => copyMarkdown(message.content)}><Copy size={14} /></button>
                     </>
-                  ) : (
-                    <pre>{message.content}</pre>
-                  )}
+                  ) : <pre>{message.content}</pre>}
                   {message.imageUrl ? <img className="generated-image" src={message.imageUrl} alt={message.content} /> : null}
                   <small>{dateTime(message.createdAt)}</small>
                 </div>
               </article>
-            ))
-          ) : (
-            <div className="empty-state">
-              <Bot size={44} />
-              <h2>选择模型后开始提问</h2>
-            </div>
-          )}
-          {activeLoading ? <div className="typing">{waitMessages[waitIndex % waitMessages.length]}</div> : null}
-        </div>
-
-        <form className="composer" onSubmit={send}>
-          {error ? <div className="error">{error}</div> : null}
-          <div className="composer-row">
-            <textarea
-              value={content}
-              onChange={(event) => setContent(event.target.value)}
-              onCompositionStart={() => setIsComposing(true)}
-              onCompositionEnd={() => setIsComposing(false)}
-              onKeyDown={handleComposerKeyDown}
-              placeholder="输入消息，Enter 发送，Shift+Enter 换行"
-              rows={2}
-            />
-            <button className="primary send" type="submit" disabled={!activeModelId || activeLoading}>
-              <Send size={18} />
-            </button>
+            )) : (
+              <div className="empty-state">
+                <Sparkles size={44} />
+                <h2>{activeAgent ? "开始使用这个智能体" : "选择模型后开始提问"}</h2>
+                {activeAgent?.description ? <p>{activeAgent.description}</p> : <p>聊天内容只保留在当前浏览器页面，刷新后不会恢复。</p>}
+              </div>
+            )}
+            {activeLoading ? <div className="typing">{waitMessages[waitIndex % waitMessages.length]}</div> : null}
           </div>
-        </form>
-      </section>
+          <form className="composer" onSubmit={send}>
+            {error ? <div className="error">{error}</div> : null}
+            <div className="composer-row">
+              <textarea
+                value={content}
+                onChange={(event) => setContent(event.target.value)}
+                onCompositionStart={() => setIsComposing(true)}
+                onCompositionEnd={() => setIsComposing(false)}
+                onKeyDown={handleComposerKeyDown}
+                placeholder="输入消息，Enter 发送，Shift+Enter 换行"
+                rows={2}
+              />
+              <button className="primary send" type="submit" disabled={activeLoading || (!activeAgent && !activeModelId)}><Send size={18} /></button>
+            </div>
+          </form>
+        </section>
       )}
     </main>
   );
 }
 
+function AgentBuilder({
+  models,
+  agents,
+  editingAgentId,
+  setEditingAgentId,
+  reload
+}: {
+  models: Model[];
+  agents: Agent[];
+  editingAgentId: string;
+  setEditingAgentId: (id: string) => void;
+  reload: () => Promise<void>;
+}) {
+  const editing = agents.find((agent) => agent.id === editingAgentId);
+  const [form, setForm] = useState({ name: "", description: "", published: false, blocks: [emptyTextBlock(), emptyModelBlock(models, 1)] as AgentBlock[] });
+  const [commandMenu, setCommandMenu] = useState<{ blockId: string; kind: "slash" | "mention"; top: number; left: number } | null>(null);
+  const [selectedModelBlockId, setSelectedModelBlockId] = useState("");
+  const [agentListCollapsed, setAgentListCollapsed] = useState(false);
+  const [draggingBlockId, setDraggingBlockId] = useState("");
+  const [publishDialogAgent, setPublishDialogAgent] = useState<Agent | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewInput, setPreviewInput] = useState("");
+  const [previewResult, setPreviewResult] = useState("");
+  const [previewTrace, setPreviewTrace] = useState<PreviewTrace[]>([]);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [builderError, setBuilderError] = useState("");
+  const chatModels = models.filter((model) => model.kind === "chat");
+  const variableNames = form.blocks
+    .filter((block): block is Extract<AgentBlock, { type: "model" }> => block.type === "model")
+    .map((block) => block.variableName);
+
+  useEffect(() => {
+    if (editing) {
+      setForm({
+        name: editing.name,
+        description: editing.description,
+        published: editing.published,
+        blocks: editing.blocks?.length ? editing.blocks : stepsToBlocks(editing.steps, models)
+      });
+    } else {
+      setForm({ name: "", description: "", published: false, blocks: [emptyTextBlock(), emptyModelBlock(models, 1)] });
+    }
+    setPreviewResult("");
+    setPreviewTrace([]);
+    setSelectedModelBlockId("");
+    setBuilderError("");
+  }, [editingAgentId, editing?.updatedAt, models.length]);
+
+  function updateBlock(id: string, patch: Partial<AgentBlock>) {
+    setForm((current) => ({
+      ...current,
+      blocks: current.blocks.map((block) => block.id === id ? ({ ...block, ...patch } as AgentBlock) : block)
+    }));
+  }
+
+  function insertBlockAfter(id: string, block: AgentBlock) {
+    setForm((current) => {
+      const index = current.blocks.findIndex((item) => item.id === id);
+      const next = [...current.blocks];
+      next.splice(index + 1, 0, block);
+      return { ...current, blocks: next };
+    });
+    setCommandMenu(null);
+  }
+
+  function insertVariable(blockId: string, variableName: string) {
+    setForm((current) => ({
+      ...current,
+      blocks: current.blocks.map((block) =>
+        block.id === blockId && block.type === "text"
+          ? { ...block, content: `${block.content.replace(/[@/]$/, "")}{{${variableName}}}` }
+          : block
+      )
+    }));
+    setCommandMenu(null);
+  }
+
+  function removeBlock(id: string) {
+    setForm((current) => {
+      const blocks = current.blocks.filter((block) => block.id !== id);
+      return { ...current, blocks: blocks.length ? blocks : [emptyTextBlock(), emptyModelBlock(models, 1)] };
+    });
+  }
+
+  function moveBlock(targetId: string) {
+    if (!draggingBlockId || draggingBlockId === targetId) return;
+    setForm((current) => {
+      const from = current.blocks.findIndex((block) => block.id === draggingBlockId);
+      const to = current.blocks.findIndex((block) => block.id === targetId);
+      if (from < 0 || to < 0) return current;
+      const blocks = [...current.blocks];
+      const [moved] = blocks.splice(from, 1);
+      blocks.splice(to, 0, moved);
+      return { ...current, blocks };
+    });
+  }
+
+  async function saveAgent(event: FormEvent) {
+    event.preventDefault();
+    setBuilderError("");
+    if (!form.name.trim()) {
+      setBuilderError("请填写智能体名称。");
+      return;
+    }
+    if (!form.description.trim()) {
+      setBuilderError("请填写说明。");
+      return;
+    }
+    const payload = {
+      ...form,
+      published: true,
+      blocks: form.blocks
+        .map((block) => block.type === "text" ? { ...block, content: block.content.trim() } : block)
+        .filter((block) => block.type === "model" || block.content)
+    };
+    let savedAgent: Agent;
+    if (editing) {
+      const result = await api<{ agent: Agent }>(`/api/agents/${editing.id}`, { method: "PATCH", body: JSON.stringify(payload) });
+      savedAgent = result.agent;
+    } else {
+      const result = await api<{ agent: Agent }>("/api/agents", { method: "POST", body: JSON.stringify(payload) });
+      setEditingAgentId(result.agent.id);
+      savedAgent = result.agent;
+    }
+    await reload();
+    setPublishDialogAgent(savedAgent);
+  }
+
+  async function copyShareLink(agent: Agent) {
+    const url = `${window.location.origin}/agent/${agent.shareId}`;
+    await navigator.clipboard.writeText(url);
+  }
+
+  async function runPreview() {
+    setPreviewLoading(true);
+    setPreviewResult("");
+    setPreviewTrace([]);
+    try {
+      const result = await api<{ reply: string; trace: PreviewTrace[] }>("/api/agents/preview", {
+        method: "POST",
+        body: JSON.stringify({ ...form, content: previewInput || "请用一句话测试这个智能体。" })
+      });
+      setPreviewResult(result.reply);
+      setPreviewTrace(result.trace || []);
+    } catch (err) {
+      setPreviewResult(err instanceof Error ? err.message : "试运行失败");
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
+  async function deleteAgent(agent: Agent) {
+    if (!confirm(`确认删除智能体「${agent.name}」？`)) return;
+    await api(`/api/agents/${agent.id}`, { method: "DELETE" });
+    setEditingAgentId("");
+    await reload();
+  }
+
+  return (
+    <section className="builder-page">
+      <header className="admin-header">
+        <div>
+          <h2>智能体构建器</h2>
+          <p>像写文档一样编排提示词，输入 / 插入模型块或引用上方变量。</p>
+        </div>
+        <div className="builder-header-actions">
+          <button className="secondary" onClick={() => setEditingAgentId("")}><Plus size={16} />新建</button>
+          <button className="secondary" type="button" onClick={() => setPreviewOpen(true)}><Send size={15} />试运行</button>
+        </div>
+      </header>
+      <div className={`builder-layout immersive ${agentListCollapsed ? "agent-list-collapsed" : ""}`}>
+        <aside className="agent-list">
+          <button className="agent-list-toggle" type="button" onClick={() => setAgentListCollapsed(!agentListCollapsed)}>
+            {agentListCollapsed ? "展开" : "收起"}
+          </button>
+          {agentListCollapsed ? null : agents.map((agent) => (
+            <button className={`agent-card ${agent.id === editingAgentId ? "active" : ""}`} key={agent.id} onClick={() => setEditingAgentId(agent.id)}>
+              <span>{agent.name}</span>
+              <small>{agent.published ? "已发布" : "草稿"} · {agent.blocks?.filter((block) => block.type === "model").length || agent.steps.length} 个模型块</small>
+            </button>
+          ))}
+        </aside>
+        <form className="builder-form doc-builder" onSubmit={saveAgent}>
+          {builderError ? <div className="error no-margin">{builderError}</div> : null}
+          <div className="builder-fields">
+            <label>智能体名称<input value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} placeholder="如：周报润色助手" /></label>
+            <label>说明<input value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} placeholder="给侧边栏使用者看的简短说明" /></label>
+          </div>
+          <div className="document-editor">
+            {form.blocks.map((block, index) => {
+              const availableVariables = ["input", ...form.blocks
+                .slice(0, index)
+                .filter((item): item is Extract<AgentBlock, { type: "model" }> => item.type === "model")
+                .map((item) => item.variableName)];
+              return (
+              block.type === "text" ? (
+                <div
+                  className={`doc-text-wrap ${draggingBlockId === block.id ? "dragging" : ""}`}
+                  key={block.id}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={() => moveBlock(block.id)}
+                >
+                  <button
+                    className="drag-handle"
+                    type="button"
+                    draggable
+                    onDragStart={() => setDraggingBlockId(block.id)}
+                    onDragEnd={() => setDraggingBlockId("")}
+                    title="拖拽排序"
+                  >
+                    <GripVertical size={16} />
+                  </button>
+                  <textarea
+                    className="doc-textarea"
+                    value={block.content}
+                    onChange={(event) => {
+                      updateBlock(block.id, { content: event.target.value });
+                      if (!event.target.value.endsWith("/") && !event.target.value.endsWith("@")) setCommandMenu(null);
+                    }}
+                    onBlur={() => window.setTimeout(() => setCommandMenu(null), 140)}
+                    onKeyUp={(event) => {
+                      const value = event.currentTarget.value;
+                      if (value.endsWith("/") || value.endsWith("@")) {
+                        const rect = event.currentTarget.getBoundingClientRect();
+                        setCommandMenu({
+                          blockId: block.id,
+                          kind: value.endsWith("/") ? "slash" : "mention",
+                          top: rect.bottom + window.scrollY - 4,
+                          left: rect.left + window.scrollX + 12
+                        });
+                      }
+                    }}
+                    rows={Math.max(3, block.content.split("\n").length + 1)}
+                    placeholder="直接写提示词。输入 / 插入模型，输入 @ 引用上方变量。"
+                  />
+                  <button className="doc-remove" type="button" onClick={() => removeBlock(block.id)} title="删除文本块"><Trash2 size={14} /></button>
+                  {commandMenu?.blockId === block.id ? (
+                    <div className="slash-menu" style={{ top: commandMenu.top, left: commandMenu.left }}>
+                      {commandMenu.kind === "slash" ? (
+                        <button type="button" onClick={() => insertBlockAfter(block.id, emptyModelBlock(models, variableNames.length + 1))}><Bot size={15} />插入大模型模块</button>
+                      ) : null}
+                      {availableVariables.map((name) => <button type="button" key={name} onClick={() => insertVariable(block.id, name)}>引用变量：{name}</button>)}
+                    </div>
+                  ) : null}
+                </div>
+              ) : (
+                <article
+                  className={`model-block compact-model ${selectedModelBlockId === block.id ? "active" : ""} ${draggingBlockId === block.id ? "dragging" : ""}`}
+                  key={block.id}
+                  onClick={() => setSelectedModelBlockId(block.id)}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={() => moveBlock(block.id)}
+                >
+                  <button
+                    className="drag-handle"
+                    type="button"
+                    draggable
+                    onDragStart={() => setDraggingBlockId(block.id)}
+                    onDragEnd={() => setDraggingBlockId("")}
+                    title="拖拽排序"
+                  >
+                    <GripVertical size={16} />
+                  </button>
+                  <div className="model-chip-main">
+                    <Bot size={17} />
+                    <strong>{block.title || `模型模块 ${index + 1}`}</strong>
+                    <span>{chatModels.find((model) => model.id === block.modelId)?.name || "未选择模型"}</span>
+                    <code>{`{{${block.variableName}}}`}</code>
+                  </div>
+                  <button
+                    className="doc-remove inline"
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      removeBlock(block.id);
+                    }}
+                    title="移除模型块"
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </article>
+              )
+            )})}
+          </div>
+          <div className="builder-actions">
+            <button className="secondary" type="button" onClick={() => setForm({ ...form, blocks: [...form.blocks, emptyTextBlock()] })}><Plus size={16} />文本块</button>
+            <button className="secondary" type="button" onClick={() => setForm({ ...form, blocks: [...form.blocks, emptyModelBlock(models, variableNames.length + 1)] })}><Bot size={16} />模型块</button>
+            <button className="primary builder-save" type="submit"><Save size={16} />保存智能体</button>
+            {editing?.published ? <button className="secondary" type="button" onClick={() => copyShareLink(editing)}><Link size={15} />复制独立链接</button> : null}
+            {editing ? <button className="danger" type="button" onClick={() => deleteAgent(editing)}><Trash2 size={15} />删除</button> : null}
+          </div>
+        </form>
+        {selectedModelBlockId ? (
+          <div className="drawer-backdrop" onClick={() => setSelectedModelBlockId("")}>
+          <aside className="model-drawer slideout" onClick={(event) => event.stopPropagation()}>
+            {form.blocks
+              .filter((block): block is Extract<AgentBlock, { type: "model" }> => block.type === "model" && block.id === selectedModelBlockId)
+              .map((block) => (
+                <div className="drawer-panel" key={block.id}>
+                  <div className="drawer-head">
+                    <h3>编辑模型模块</h3>
+                    <button className="ghost compact-btn" type="button" onClick={() => setSelectedModelBlockId("")}>关闭</button>
+                  </div>
+                  <label>模块名称<input value={block.title} onChange={(event) => updateBlock(block.id, { title: event.target.value })} /></label>
+                  <label>输出变量名<input value={block.variableName} onChange={(event) => updateBlock(block.id, { variableName: event.target.value.replace(/[^A-Za-z0-9_]/g, "_") })} /></label>
+                  <label>选择模型
+                    <select value={block.modelId} onChange={(event) => updateBlock(block.id, { modelId: event.target.value })}>
+                      {chatModels.map((model) => <option key={model.id} value={model.id}>{model.name} · {model.model}</option>)}
+                    </select>
+                  </label>
+                  <p className="hint no-margin">这个模块会读取上方文档内容和已生成变量，输出保存为 <code>{`{{${block.variableName}}}`}</code>。</p>
+                </div>
+              ))}
+          </aside>
+          </div>
+        ) : null}
+      </div>
+      {previewOpen ? (
+        <div className="drawer-backdrop" onClick={() => setPreviewOpen(false)}>
+          <aside className="model-drawer preview-drawer slideout" onClick={(event) => event.stopPropagation()}>
+            <div className="drawer-panel">
+              <div className="drawer-head">
+                <div>
+                  <h3>试运行</h3>
+                  <p className="hint no-margin">这里的内容就是初始变量 <code>{`{{input}}`}</code>，可留空。</p>
+                </div>
+                <button className="ghost compact-btn" type="button" onClick={() => setPreviewOpen(false)}>关闭</button>
+              </div>
+              <label>input<textarea value={previewInput} onChange={(event) => setPreviewInput(event.target.value)} rows={4} placeholder="输入一段测试内容，可以留空" /></label>
+              <button className="primary builder-save" type="button" disabled={previewLoading} onClick={runPreview}>
+                <Send size={15} />{previewLoading ? "AI疯狂翻书中 (ง •̀_•́)ง" : "运行"}
+              </button>
+              {previewTrace.length ? (
+                <div className="preview-trace">
+                  {previewTrace.map((item, index) => (
+                    <article className="preview-node" key={`${item.blockId}-${index}`}>
+                      <div className="step-head">
+                        <strong>模型输出 {index + 1}</strong>
+                        <code>{`{{${item.variableName}}}`}</code>
+                      </div>
+                      <div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]}>{item.content}</ReactMarkdown></div>
+                    </article>
+                  ))}
+                </div>
+              ) : null}
+              {previewResult ? (
+                <div className="preview-output final-output">
+                  <strong>最终输出</strong>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{previewResult}</ReactMarkdown>
+                </div>
+              ) : null}
+            </div>
+          </aside>
+        </div>
+      ) : null}
+      {publishDialogAgent ? (
+        <div className="modal-backdrop" onClick={() => setPublishDialogAgent(null)}>
+          <div className="publish-modal" onClick={(event) => event.stopPropagation()}>
+            <h3>智能体已发布</h3>
+            <p>{publishDialogAgent.name} 已出现在左侧智能体列表，也可以用独立链接打开。</p>
+            <code>{`${window.location.origin}/agent/${publishDialogAgent.shareId}`}</code>
+            <div className="builder-actions">
+              <button className="primary builder-save" type="button" onClick={() => copyShareLink(publishDialogAgent)}>复制链接</button>
+              <button className="secondary" type="button" onClick={() => setPublishDialogAgent(null)}>完成</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function AdminPanel({ refreshModels }: { refreshModels: () => Promise<void> }) {
-  const [tab, setTab] = useState<"settings" | "users" | "models" | "tokens" | "records">("settings");
+  const [tab, setTab] = useState<"settings" | "users" | "models" | "tokens">("settings");
   const [users, setUsers] = useState<User[]>([]);
   const [models, setModels] = useState<Model[]>([]);
   const [tokens, setTokens] = useState<IntegrationToken[]>([]);
-  const [records, setRecords] = useState<(Conversation & { user: User })[]>([]);
   const [settings, setSettings] = useState<SystemSettings>({ safetyRules: "" });
   const [notice, setNotice] = useState("");
 
   async function load() {
-    const [settingsResult, userResult, modelResult, tokenResult, recordResult] = await Promise.all([
+    const [settingsResult, userResult, modelResult, tokenResult] = await Promise.all([
       api<{ settings: SystemSettings }>("/api/admin/settings"),
       api<{ users: User[] }>("/api/admin/users"),
       api<{ models: Model[] }>("/api/admin/models"),
-      api<{ tokens: IntegrationToken[] }>("/api/admin/integration-tokens"),
-      api<{ conversations: (Conversation & { user: User })[] }>("/api/admin/conversations")
+      api<{ tokens: IntegrationToken[] }>("/api/admin/integration-tokens")
     ]);
     setSettings(settingsResult.settings);
     setUsers(userResult.users);
     setModels(modelResult.models);
     setTokens(tokenResult.tokens);
-    setRecords(recordResult.conversations);
   }
 
   useEffect(() => {
@@ -549,68 +924,44 @@ function AdminPanel({ refreshModels }: { refreshModels: () => Promise<void> }) {
   }, []);
 
   return (
-      <section className="admin-page">
-        <header className="admin-header">
-          <div>
-            <h2>管理后台</h2>
-            <p>账号、模型、机器人 API 和对话审计</p>
-          </div>
-        </header>
-        <nav className="tabs">
-          <button className={tab === "settings" ? "active" : ""} onClick={() => setTab("settings")}><Shield size={16} />规则</button>
-          <button className={tab === "users" ? "active" : ""} onClick={() => setTab("users")}><Users size={16} />账号</button>
-          <button className={tab === "models" ? "active" : ""} onClick={() => setTab("models")}><Bot size={16} />模型</button>
-          <button className={tab === "tokens" ? "active" : ""} onClick={() => setTab("tokens")}><KeyRound size={16} />API Token</button>
-          <button className={tab === "records" ? "active" : ""} onClick={() => setTab("records")}><MessageSquare size={16} />记录</button>
-        </nav>
-        {notice ? <div className="notice">{notice}</div> : null}
-        <div className="admin-body">
-          {tab === "settings" ? <SettingsTab settings={settings} setNotice={setNotice} reload={load} /> : null}
-          {tab === "users" ? <UsersTab users={users} reload={load} /> : null}
-          {tab === "models" ? <ModelsTab models={models} reload={async () => { await load(); await refreshModels(); }} /> : null}
-          {tab === "tokens" ? <TokensTab tokens={tokens} reload={load} setNotice={setNotice} /> : null}
-          {tab === "records" ? <RecordsTab records={records} users={users} /> : null}
+    <section className="admin-page">
+      <header className="admin-header">
+        <div>
+          <h2>管理后台</h2>
+          <p>账号、模型和机器人 API。后台不再保存用户聊天记录。</p>
         </div>
-      </section>
+      </header>
+      <nav className="tabs">
+        <button className={tab === "settings" ? "active" : ""} onClick={() => setTab("settings")}><Shield size={16} />规则</button>
+        <button className={tab === "users" ? "active" : ""} onClick={() => setTab("users")}><Users size={16} />账号</button>
+        <button className={tab === "models" ? "active" : ""} onClick={() => setTab("models")}><Bot size={16} />模型</button>
+        <button className={tab === "tokens" ? "active" : ""} onClick={() => setTab("tokens")}><KeyRound size={16} />API Token</button>
+      </nav>
+      {notice ? <div className="notice">{notice}</div> : null}
+      <div className="admin-body">
+        {tab === "settings" ? <SettingsTab settings={settings} setNotice={setNotice} reload={load} /> : null}
+        {tab === "users" ? <UsersTab users={users} reload={load} /> : null}
+        {tab === "models" ? <ModelsTab models={models} reload={async () => { await load(); await refreshModels(); }} /> : null}
+        {tab === "tokens" ? <TokensTab tokens={tokens} reload={load} setNotice={setNotice} /> : null}
+      </div>
+    </section>
   );
 }
 
-function SettingsTab({
-  settings,
-  reload,
-  setNotice
-}: {
-  settings: SystemSettings;
-  reload: () => Promise<void>;
-  setNotice: (notice: string) => void;
-}) {
+function SettingsTab({ settings, reload, setNotice }: { settings: SystemSettings; reload: () => Promise<void>; setNotice: (notice: string) => void }) {
   const [safetyRules, setSafetyRules] = useState(settings.safetyRules);
-
-  useEffect(() => {
-    setSafetyRules(settings.safetyRules);
-  }, [settings.safetyRules]);
+  useEffect(() => setSafetyRules(settings.safetyRules), [settings.safetyRules]);
 
   async function save(event: FormEvent) {
     event.preventDefault();
-    await api("/api/admin/settings", {
-      method: "PATCH",
-      body: JSON.stringify({ safetyRules })
-    });
+    await api("/api/admin/settings", { method: "PATCH", body: JSON.stringify({ safetyRules }) });
     setNotice("系统内置安全规则已保存");
     await reload();
   }
 
   return (
     <form className="settings-panel" onSubmit={save}>
-      <label className="field-label">
-        系统内置安全规则
-        <textarea
-          value={safetyRules}
-          onChange={(event) => setSafetyRules(event.target.value)}
-          rows={8}
-          placeholder="这段内容会作为最高优先级系统提示词，自动加到每次模型调用前。"
-        />
-      </label>
+      <label className="field-label">系统内置安全规则<textarea value={safetyRules} onChange={(event) => setSafetyRules(event.target.value)} rows={8} /></label>
       <button className="primary settings-save" type="submit"><Save size={16} />保存规则</button>
     </form>
   );
@@ -629,29 +980,16 @@ function UsersTab({ users, reload }: { users: User[]; reload: () => Promise<void
     await reload();
   }
 
-  async function toggle(user: User) {
-    await api(`/api/admin/users/${user.id}`, { method: "PATCH", body: JSON.stringify({ enabled: !user.enabled }) });
-    await reload();
-  }
-
   async function saveUser(user: User) {
     const draft = editing[user.id];
     if (!draft) return;
-    await api(`/api/admin/users/${user.id}`, {
-      method: "PATCH",
-      body: JSON.stringify({
-        username: draft.username,
-        role: draft.role,
-        enabled: draft.enabled,
-        password: draft.password
-      })
-    });
+    await api(`/api/admin/users/${user.id}`, { method: "PATCH", body: JSON.stringify(draft) });
     setEditing(({ [user.id]: _removed, ...rest }) => rest);
     await reload();
   }
 
   async function deleteUser(user: User) {
-    if (!confirm(`确认删除账号 ${user.username}？该账号的聊天记录也会删除。`)) return;
+    if (!confirm(`确认删除账号 ${user.username}？该账号创建的智能体也会删除。`)) return;
     await api(`/api/admin/users/${user.id}`, { method: "DELETE" });
     await reload();
   }
@@ -670,10 +1008,7 @@ function UsersTab({ users, reload }: { users: User[]; reload: () => Promise<void
             {editing[user.id] ? (
               <>
                 <label className="field-label">用户名<input value={editing[user.id].username} onChange={(event) => setEditing({ ...editing, [user.id]: { ...editing[user.id], username: event.target.value } })} /></label>
-                <label className="field-label">角色<select value={editing[user.id].role} onChange={(event) => setEditing({ ...editing, [user.id]: { ...editing[user.id], role: event.target.value as Role } })}>
-                    <option value="user">普通用户</option>
-                    <option value="admin">管理员</option>
-                  </select></label>
+                <label className="field-label">角色<select value={editing[user.id].role} onChange={(event) => setEditing({ ...editing, [user.id]: { ...editing[user.id], role: event.target.value as Role } })}><option value="user">普通用户</option><option value="admin">管理员</option></select></label>
                 <label className="field-label">新密码<input placeholder="留空不改" value={editing[user.id].password} onChange={(event) => setEditing({ ...editing, [user.id]: { ...editing[user.id], password: event.target.value } })} /></label>
                 <label className="inline-check"><input type="checkbox" checked={editing[user.id].enabled} onChange={(event) => setEditing({ ...editing, [user.id]: { ...editing[user.id], enabled: event.target.checked } })} />启用</label>
                 <button className="secondary" onClick={() => saveUser(user)}><Save size={15} />保存</button>
@@ -683,7 +1018,7 @@ function UsersTab({ users, reload }: { users: User[]; reload: () => Promise<void
                 <span>{user.username}<small>{user.enabled ? "启用" : "停用"}</small></span>
                 <span>{user.role === "admin" ? "管理员" : "普通用户"}</span>
                 <button className="secondary" onClick={() => setEditing({ ...editing, [user.id]: { username: user.username, role: user.role, enabled: user.enabled, password: "" } })}><Edit3 size={15} />编辑</button>
-                <button className="secondary" onClick={() => toggle(user)}>{user.enabled ? "停用" : "启用"}</button>
+                <button className="secondary" onClick={async () => { await api(`/api/admin/users/${user.id}`, { method: "PATCH", body: JSON.stringify({ enabled: !user.enabled }) }); await reload(); }}>{user.enabled ? "停用" : "启用"}</button>
                 <button className="danger" onClick={() => deleteUser(user)}><Trash2 size={15} />删除</button>
               </>
             )}
@@ -695,15 +1030,7 @@ function UsersTab({ users, reload }: { users: User[]; reload: () => Promise<void
 }
 
 function ModelsTab({ models, reload }: { models: Model[]; reload: () => Promise<void> }) {
-  const [form, setForm] = useState({
-    name: "",
-    kind: "chat" as "chat" | "image",
-    baseUrl: "https://app.yylx.io/v1",
-    apiKey: "",
-    model: "",
-    systemPrompt: "",
-    enabled: true
-  });
+  const [form, setForm] = useState({ name: "", kind: "chat" as "chat" | "image", baseUrl: "https://app.yylx.io/v1", apiKey: "", model: "", systemPrompt: "", enabled: true });
   const [editing, setEditing] = useState<Record<string, { name: string; kind: "chat" | "image"; baseUrl: string; model: string; apiKey: string; systemPrompt: string; enabled: boolean }>>({});
 
   async function createModel(event: FormEvent) {
@@ -713,18 +1040,10 @@ function ModelsTab({ models, reload }: { models: Model[]; reload: () => Promise<
     await reload();
   }
 
-  async function toggle(model: Model) {
-    await api(`/api/admin/models/${model.id}`, { method: "PATCH", body: JSON.stringify({ enabled: !model.enabled }) });
-    await reload();
-  }
-
   async function saveModel(model: Model) {
     const draft = editing[model.id];
     if (!draft) return;
-    await api(`/api/admin/models/${model.id}`, {
-      method: "PATCH",
-      body: JSON.stringify(draft)
-    });
+    await api(`/api/admin/models/${model.id}`, { method: "PATCH", body: JSON.stringify(draft) });
     setEditing(({ [model.id]: _removed, ...rest }) => rest);
     await reload();
   }
@@ -740,11 +1059,8 @@ function ModelsTab({ models, reload }: { models: Model[]; reload: () => Promise<
       <form className="admin-form" onSubmit={createModel}>
         <h3><Bot size={17} />接入模型</h3>
         <input placeholder="展示名称，如 通义千问" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />
-        <select value={form.kind} onChange={(event) => setForm({ ...form, kind: event.target.value as "chat" | "image" })}>
-          <option value="chat">聊天模型</option>
-          <option value="image">图片模型</option>
-        </select>
-        <input placeholder="Base URL，如 https://dashscope.aliyuncs.com/compatible-mode/v1" value={form.baseUrl} onChange={(event) => setForm({ ...form, baseUrl: event.target.value })} />
+        <select value={form.kind} onChange={(event) => setForm({ ...form, kind: event.target.value as "chat" | "image" })}><option value="chat">聊天模型</option><option value="image">图片模型</option></select>
+        <input placeholder="Base URL" value={form.baseUrl} onChange={(event) => setForm({ ...form, baseUrl: event.target.value })} />
         <input placeholder="API Key" value={form.apiKey} onChange={(event) => setForm({ ...form, apiKey: event.target.value })} />
         <input placeholder="模型 ID，如 qwen-plus / gpt-image-2" value={form.model} onChange={(event) => setForm({ ...form, model: event.target.value })} />
         <textarea placeholder="模型默认 System Prompt，可留空" value={form.systemPrompt} rows={4} onChange={(event) => setForm({ ...form, systemPrompt: event.target.value })} />
@@ -757,10 +1073,7 @@ function ModelsTab({ models, reload }: { models: Model[]; reload: () => Promise<
             {editing[model.id] ? (
               <>
                 <label className="field-label">展示名称<input value={editing[model.id].name} onChange={(event) => setEditing({ ...editing, [model.id]: { ...editing[model.id], name: event.target.value } })} /></label>
-                <label className="field-label">类型<select value={editing[model.id].kind} onChange={(event) => setEditing({ ...editing, [model.id]: { ...editing[model.id], kind: event.target.value as "chat" | "image" } })}>
-                    <option value="chat">聊天模型</option>
-                    <option value="image">图片模型</option>
-                  </select></label>
+                <label className="field-label">类型<select value={editing[model.id].kind} onChange={(event) => setEditing({ ...editing, [model.id]: { ...editing[model.id], kind: event.target.value as "chat" | "image" } })}><option value="chat">聊天模型</option><option value="image">图片模型</option></select></label>
                 <label className="field-label">Base URL<input value={editing[model.id].baseUrl} onChange={(event) => setEditing({ ...editing, [model.id]: { ...editing[model.id], baseUrl: event.target.value } })} /></label>
                 <label className="field-label">模型 ID<input value={editing[model.id].model} onChange={(event) => setEditing({ ...editing, [model.id]: { ...editing[model.id], model: event.target.value } })} /></label>
                 <label className="field-label">API Key<input value={editing[model.id].apiKey} onChange={(event) => setEditing({ ...editing, [model.id]: { ...editing[model.id], apiKey: event.target.value } })} /></label>
@@ -773,7 +1086,7 @@ function ModelsTab({ models, reload }: { models: Model[]; reload: () => Promise<
                 <span>{model.name}<small>{model.kind === "image" ? "图片" : "聊天"} · {model.model}</small></span>
                 <span>{model.hasApiKey ? "已配置 Key" : "缺少 Key"}</span>
                 <button className="secondary" onClick={() => setEditing({ ...editing, [model.id]: { name: model.name, kind: model.kind, baseUrl: model.baseUrl, model: model.model, apiKey: model.apiKey || "", systemPrompt: model.systemPrompt || "", enabled: model.enabled } })}><Edit3 size={15} />编辑</button>
-                <button className="secondary" onClick={() => toggle(model)}>{model.enabled ? "停用" : "启用"}</button>
+                <button className="secondary" onClick={async () => { await api(`/api/admin/models/${model.id}`, { method: "PATCH", body: JSON.stringify({ enabled: !model.enabled }) }); await reload(); }}>{model.enabled ? "停用" : "启用"}</button>
                 <button className="danger" onClick={() => deleteModel(model)}><Trash2 size={15} />删除</button>
               </>
             )}
@@ -784,37 +1097,17 @@ function ModelsTab({ models, reload }: { models: Model[]; reload: () => Promise<
   );
 }
 
-function TokensTab({
-  tokens,
-  reload,
-  setNotice
-}: {
-  tokens: IntegrationToken[];
-  reload: () => Promise<void>;
-  setNotice: (notice: string) => void;
-}) {
+function TokensTab({ tokens, reload, setNotice }: { tokens: IntegrationToken[]; reload: () => Promise<void>; setNotice: (notice: string) => void }) {
   const [name, setName] = useState("");
   const [visible, setVisible] = useState<Record<string, boolean>>({});
 
   async function createToken(event: FormEvent) {
     event.preventDefault();
-    const result = await api<{ token: IntegrationToken }>("/api/admin/integration-tokens", {
-      method: "POST",
-      body: JSON.stringify({ name })
-    });
+    const result = await api<{ token: IntegrationToken }>("/api/admin/integration-tokens", { method: "POST", body: JSON.stringify({ name }) });
     setNotice(`已生成 Token：${result.token.name}`);
     setVisible({ ...visible, [result.token.id]: true });
     setName("");
     await reload();
-  }
-
-  async function copyToken(token: IntegrationToken) {
-    if (!token.token) {
-      setNotice("旧 Token 没有保存明文，请重新生成一个新的 Token。");
-      return;
-    }
-    await navigator.clipboard.writeText(token.token);
-    setNotice(`已复制 Token：${token.name}`);
   }
 
   function maskToken(value?: string) {
@@ -826,10 +1119,9 @@ function TokensTab({
     <div className="admin-grid">
       <form className="admin-form" onSubmit={createToken}>
         <h3><KeyRound size={17} />机器人接入</h3>
-        <p className="hint no-margin">API Token 不是给网页登录用户用的，是给钉钉、飞书、企业微信等机器人服务端调用 `/api/integrations/chat` 时做鉴权用的。</p>
-        <input placeholder="Token 名称，如 钉钉机器人" value={name} onChange={(event) => setName(event.target.value)} />
+        <p className="hint no-margin">Token 用于外部机器人服务端调用 `/api/integrations/chat`。</p>
+        <input placeholder="Token 名称" value={name} onChange={(event) => setName(event.target.value)} />
         <button className="primary"><Plus size={16} />生成 Token</button>
-        <p className="hint">外部办公软件可 POST /api/integrations/chat，并在 Authorization 中带 Bearer Token。</p>
       </form>
       <div className="table">
         {tokens.map((token) => (
@@ -838,11 +1130,8 @@ function TokensTab({
             <code>{visible[token.id] ? token.token || "旧 Token 无明文" : maskToken(token.token)}</code>
             <span>{token.enabled ? "启用" : "停用"}</span>
             <span>{dateTime(token.createdAt)}</span>
-            <button className="secondary" onClick={() => setVisible({ ...visible, [token.id]: !visible[token.id] })}>
-              {visible[token.id] ? <EyeOff size={15} /> : <Eye size={15} />}
-              {visible[token.id] ? "隐藏" : "显示"}
-            </button>
-            <button className="secondary" onClick={() => copyToken(token)}><Copy size={15} />复制</button>
+            <button className="secondary" onClick={() => setVisible({ ...visible, [token.id]: !visible[token.id] })}>{visible[token.id] ? <EyeOff size={15} /> : <Eye size={15} />}{visible[token.id] ? "隐藏" : "显示"}</button>
+            <button className="secondary" onClick={async () => { if (token.token) await navigator.clipboard.writeText(token.token); }}><Copy size={15} />复制</button>
           </div>
         ))}
       </div>
@@ -850,40 +1139,79 @@ function TokensTab({
   );
 }
 
-function RecordsTab({ records, users }: { records: (Conversation & { user: User })[]; users: User[] }) {
-  const [userId, setUserId] = useState("");
-  const filtered = userId ? records.filter((record) => record.userId === userId) : records;
+function PublicAgentPage({ shareId }: { shareId: string }) {
+  const [agent, setAgent] = useState<{ shareId: string; name: string; description: string } | null>(null);
+  const [content, setContent] = useState("");
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    api<{ agent: { shareId: string; name: string; description: string } }>(`/api/public/agents/${shareId}`)
+      .then((result) => setAgent(result.agent))
+      .catch((err) => setError(err.message));
+  }, [shareId]);
+
+  async function send(event: FormEvent) {
+    event.preventDefault();
+    const text = content.trim();
+    if (!text || loading) return;
+    const userMessage: Message = { role: "user", content: text, createdAt: new Date().toISOString() };
+    setMessages((items) => [...items, userMessage]);
+    setContent("");
+    setLoading(true);
+    setError("");
+    try {
+      const result = await api<{ reply: string; imageUrl?: string }>(`/api/public/agents/${shareId}/chat`, {
+        method: "POST",
+        body: JSON.stringify({ content: text })
+      });
+      setMessages((items) => [...items, { role: "assistant", content: result.reply, imageUrl: result.imageUrl, createdAt: new Date().toISOString() }]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "发送失败");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   return (
-    <div className="records">
-      <div className="record-filter">
-        <select value={userId} onChange={(event) => setUserId(event.target.value)}>
-          <option value="">全部账号</option>
-          {users.map((user) => (
-            <option key={user.id} value={user.id}>{user.username}</option>
-          ))}
-        </select>
-      </div>
-      {filtered.map((record) => (
-        <details key={record.id}>
-          <summary>
-            <span>{record.title}</span>
-            <small>{record.user?.username || "未知用户"} · {dateTime(record.updatedAt)}</small>
-          </summary>
-          {record.messages.map((message, index) => (
-            <article className={`audit-message ${message.role}`} key={`${record.id}-${index}`}>
-              <strong>{message.role}</strong>
-              <pre>{message.content}</pre>
-              {message.imageUrl ? <img className="audit-image" src={message.imageUrl} alt={message.content} /> : null}
+    <main className="public-agent-page">
+      <header className="public-agent-header">
+        <img className="product-logo" src="/ihd-logo.png" alt="IHD" />
+        <div>
+          <h1>{agent?.name || "智能体"}</h1>
+          <p>{agent?.description || "I have a demo"}</p>
+        </div>
+      </header>
+      <section className="public-chat">
+        <div className="messages public-messages">
+          {messages.length ? messages.map((message, index) => (
+            <article key={`${message.createdAt}-${index}`} className={`message ${message.role}`}>
+              <div className="avatar">{message.role === "user" ? "你" : "IHD"}</div>
+              <div className="bubble">
+                {message.role === "assistant" ? <div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown></div> : <pre>{message.content}</pre>}
+                {message.imageUrl ? <img className="generated-image" src={message.imageUrl} alt={message.content} /> : null}
+              </div>
             </article>
-          ))}
-        </details>
-      ))}
-    </div>
+          )) : <div className="empty-state"><Sparkles size={44} /><h2>开始使用这个智能体</h2></div>}
+          {loading ? <div className="typing">正在运行智能体</div> : null}
+        </div>
+        <form className="composer" onSubmit={send}>
+          {error ? <div className="error">{error}</div> : null}
+          <div className="composer-row">
+            <textarea value={content} onChange={(event) => setContent(event.target.value)} rows={2} placeholder="输入消息" />
+            <button className="primary send" type="submit" disabled={loading || !agent}><Send size={18} /></button>
+          </div>
+        </form>
+      </section>
+    </main>
   );
 }
 
 function App() {
+  const publicAgentMatch = window.location.pathname.match(/^\/agent\/([^/]+)$/);
+  if (publicAgentMatch) return <PublicAgentPage shareId={publicAgentMatch[1]} />;
+
   const [user, setUser] = useState<User | null>(null);
   const [booting, setBooting] = useState(true);
 
@@ -896,15 +1224,7 @@ function App() {
 
   if (booting) return <div className="boot">加载中...</div>;
   if (!user) return <Login onDone={setUser} />;
-  return (
-    <ChatApp
-      user={user}
-      onLogout={() => {
-        localStorage.removeItem(tokenKey);
-        setUser(null);
-      }}
-    />
-  );
+  return <ChatApp user={user} onLogout={() => { localStorage.removeItem(tokenKey); setUser(null); }} />;
 }
 
 createRoot(document.getElementById("root")!).render(<App />);

@@ -42,6 +42,39 @@ export type Conversation = {
   updatedAt: string;
 };
 
+export type AgentStep = {
+  id: string;
+  prompt: string;
+  modelId: string;
+};
+
+export type AgentBlock =
+  | {
+      id: string;
+      type: "text";
+      content: string;
+    }
+  | {
+      id: string;
+      type: "model";
+      modelId: string;
+      variableName: string;
+      title: string;
+    };
+
+export type Agent = {
+  id: string;
+  userId: string;
+  shareId: string;
+  name: string;
+  description: string;
+  steps: AgentStep[];
+  blocks: AgentBlock[];
+  published: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type Workspace = {
   id: string;
   userId: string;
@@ -66,6 +99,7 @@ export type Database = {
   users: User[];
   models: ModelConfig[];
   conversations: Conversation[];
+  agents: Agent[];
   workspaces: Workspace[];
   integrationTokens: IntegrationToken[];
   settings: SystemSettings;

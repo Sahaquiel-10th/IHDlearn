@@ -3,7 +3,7 @@ import "dotenv/config";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { store } from "./db.js";
-import { asyncRoute, auth, requireRole } from "./middleware.js";
+import { asyncRoute, auth } from "./middleware.js";
 import { callModel } from "./modelGateway.js";
 import { createPlainToken, hashPassword, hashToken, signToken, uid, verifyPassword } from "./security.js";
 import { adminModel, publicModel, publicUser } from "./serializers.js";
@@ -14,6 +14,7 @@ const root = path.resolve(__dirname, "..");
 const app = express();
 const port = Number(process.env.PORT ?? 3001);
 const jwtSecret = process.env.JWT_SECRET ?? "dev-secret-change-me";
+const adminUsername = process.env.ADMIN_USERNAME ?? "IHD2025";
 
 app.use((req, res, next) => {
   const configuredOrigins = (process.env.APP_ORIGIN ?? "")
@@ -437,7 +438,14 @@ app.post("/api/public/agents/:shareId/chat", asyncRoute(async (req, res) => {
   res.json({ reply: result.reply, imageUrl: result.imageUrl });
 }));
 
-const admin: RequestHandler[] = [auth(jwtSecret), requireRole("admin")];
+const requireAdminAccount: RequestHandler = (req, res, next) => {
+  if (req.user?.role !== "admin" || req.user.username !== adminUsername) {
+    return res.status(403).json({ error: "权限不足" });
+  }
+  next();
+};
+
+const admin: RequestHandler[] = [auth(jwtSecret), requireAdminAccount];
 
 app.get("/api/admin/settings", ...admin, asyncRoute(async (_req, res) => {
   const db = await store.read();

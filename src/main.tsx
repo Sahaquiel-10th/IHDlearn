@@ -142,6 +142,26 @@ type PreviewTrace =
 
 const tokenKey = "enterprise-ai-token";
 const apiBaseKey = "ihd-api-base-url";
+const adminUsername = "IHD2025";
+
+function isAdminUser(user: User) {
+  return user.role === "admin" && user.username === adminUsername;
+}
+
+function chatStorageKey(userId: string) {
+  return `ihd-chat-sessions:${userId}`;
+}
+
+function readStoredChatState(userId: string) {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(chatStorageKey(userId)) || "{}") as { sessions?: Session[]; activeId?: string };
+    const sessions = Array.isArray(parsed.sessions) ? parsed.sessions : [];
+    const activeId = typeof parsed.activeId === "string" && sessions.some((session) => session.id === parsed.activeId) ? parsed.activeId : "";
+    return { sessions, activeId };
+  } catch {
+    return { sessions: [] as Session[], activeId: "" };
+  }
+}
 
 function configuredApiBase() {
   const runtimeApiBase = (window as Window & { IHD_API_BASE_URL?: string }).IHD_API_BASE_URL || "";
@@ -291,11 +311,13 @@ function Login({ onDone }: { onDone: (user: User) => void }) {
 }
 
 function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
+  const storedChatState = readStoredChatState(user.id);
+  const canManage = isAdminUser(user);
   const [models, setModels] = useState<Model[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
-  const [sessions, setSessions] = useState<Session[]>([]);
-  const [activeId, setActiveId] = useState("");
+  const [sessions, setSessions] = useState<Session[]>(storedChatState.sessions);
+  const [activeId, setActiveId] = useState(storedChatState.activeId);
   const [draftModelId, setDraftModelId] = useState("");
   const [content, setContent] = useState("");
   const [loading, setLoading] = useState<Record<string, boolean>>({});
@@ -333,6 +355,18 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
   useEffect(() => {
     refresh().catch((err) => setError(err.message));
   }, []);
+
+  useEffect(() => {
+    localStorage.setItem(chatStorageKey(user.id), JSON.stringify({ sessions, activeId }));
+  }, [user.id, sessions, activeId]);
+
+  useEffect(() => {
+    if (activeId && !sessions.some((session) => session.id === activeId)) setActiveId("");
+  }, [activeId, sessions]);
+
+  useEffect(() => {
+    if (view === "admin" && !canManage) setView("chat");
+  }, [view, canManage]);
 
   useEffect(() => {
     if (!Object.values(loading).some(Boolean)) return;
@@ -468,7 +502,7 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
         <button className={`nav-item ${view === "builder" ? "active" : ""}`} onClick={() => { setView("builder"); setActiveId(""); }}>
           <Workflow size={17} /><span>构建智能体</span>
         </button>
-        {user.role === "admin" ? (
+        {canManage ? (
           <button className={`nav-item ${view === "admin" ? "active" : ""}`} onClick={() => { setView("admin"); setActiveId(""); }}>
             <Settings size={16} /><span>管理后台</span>
           </button>
@@ -505,7 +539,7 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
         </div>
       </aside>
 
-      {view === "admin" && user.role === "admin" ? (
+      {view === "admin" && canManage ? (
         <AdminPanel refreshModels={refresh} />
       ) : view === "builder" ? (
         <AgentBuilder

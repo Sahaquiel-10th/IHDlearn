@@ -49,6 +49,33 @@ function titleFrom(content: string) {
   return content.replace(/\s+/g, " ").slice(0, 32) || "新对话";
 }
 
+function requestHistory(value: unknown, modelId?: string): Message[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .slice(-16)
+    .flatMap((item): Message[] => {
+      if (!item || typeof item !== "object") return [];
+      const record = item as Partial<Message>;
+      if (record.role !== "user" && record.role !== "assistant") return [];
+      if (typeof record.content !== "string" || !record.content.trim()) return [];
+      return [{
+        role: record.role,
+        content: record.content.slice(0, 8000),
+        imageUrl: typeof record.imageUrl === "string" ? record.imageUrl : undefined,
+        modelId: typeof record.modelId === "string" ? record.modelId : modelId,
+        createdAt: typeof record.createdAt === "string" ? record.createdAt : now()
+      }];
+    });
+}
+
+function agentContentWithHistory(content: string, history: Message[]) {
+  if (!history.length) return content;
+  const context = history
+    .map((message) => `${message.role === "user" ? "用户" : "助手"}：${message.content}`)
+    .join("\n\n");
+  return [`以下是本轮之前的对话上下文：`, context, `当前用户输入：`, content].join("\n\n");
+}
+
 function publicAgent(agent: Agent) {
   return {
     id: agent.id,
@@ -127,6 +154,7 @@ app.post(
     const db = await store.read();
     const model = db.models.find((item) => item.id === modelId && item.enabled);
     if (!model) return res.status(404).json({ error: "模型不存在或未启用" });
+    const history = requestHistory(req.body.history, model.id);
 
     const userMessage: Message = {
       role: "user",
@@ -134,7 +162,7 @@ app.post(
       modelId: model.id,
       createdAt: now()
     };
-    const result = await callModel(model, [userMessage], db.settings.safetyRules);
+    const result = await callModel(model, [...history, userMessage], db.settings.safetyRules);
     const assistantMessage: Message = {
       role: "assistant",
       content: result.content,
@@ -386,7 +414,8 @@ app.post("/api/agents/:id/chat", auth(jwtSecret), asyncRoute(async (req, res) =>
   const agent = db.agents.find((item) => item.id === req.params.id && item.userId === req.user!.id && item.published);
   if (!agent) return res.status(404).json({ error: "智能体不存在或尚未发布" });
 
-  const result = await runAgent(agent, content, db.models, db.settings.safetyRules);
+  const history = requestHistory(req.body.history);
+  const result = await runAgent(agent, agentContentWithHistory(content, history), db.models, db.settings.safetyRules);
   res.json({
     reply: result.reply,
     imageUrl: result.imageUrl,

@@ -163,6 +163,13 @@ function readStoredChatState(userId: string) {
   }
 }
 
+function recentHistory(messages: Message[]) {
+  return messages
+    .filter((message) => message.role === "user" || message.role === "assistant")
+    .slice(-16)
+    .map(({ role, content, createdAt, modelId, imageUrl }) => ({ role, content, createdAt, modelId, imageUrl }));
+}
+
 function configuredApiBase() {
   const runtimeApiBase = (window as Window & { IHD_API_BASE_URL?: string }).IHD_API_BASE_URL || "";
   const buildApiBase = (import.meta as ImportMeta & { env?: Record<string, string> }).env?.VITE_API_BASE_URL || "";
@@ -253,8 +260,8 @@ function renderHighlightedVariables(content: string) {
 }
 
 function Login({ onDone }: { onDone: (user: User) => void }) {
-  const [username, setUsername] = useState("IHD2025");
-  const [password, setPassword] = useState("15658855442");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const [apiBaseDraft, setApiBaseDraft] = useState(configuredApiBase());
   const [error, setError] = useState("");
 
@@ -288,11 +295,11 @@ function Login({ onDone }: { onDone: (user: User) => void }) {
         </div>
         <label>
           账号
-          <input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="username" />
+          <input value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="off" />
         </label>
         <label>
           密码
-          <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" autoComplete="current-password" />
+          <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" autoComplete="new-password" />
         </label>
         <label>
           后端地址
@@ -414,6 +421,7 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
     if (isAgentSession && !active.agentId) return;
 
     const sessionId = active?.id || localId("ses");
+    const history = recentHistory(active?.messages ?? []);
     const userMessage: Message = { role: "user", content: text, modelId, createdAt };
     setContent("");
     setError("");
@@ -442,13 +450,13 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
       if (isAgentSession) {
         const response = await api<{ reply: string; imageUrl?: string }>(`/api/agents/${active!.agentId}/chat`, {
           method: "POST",
-          body: JSON.stringify({ content: text })
+          body: JSON.stringify({ content: text, history })
         });
         assistantMessage = { role: "assistant", content: response.reply, imageUrl: response.imageUrl, createdAt: new Date().toISOString() };
       } else {
         const response = await api<{ message: Message }>("/api/chat", {
           method: "POST",
-          body: JSON.stringify({ content: text, modelId })
+          body: JSON.stringify({ content: text, modelId, history })
         });
         assistantMessage = response.message;
       }
@@ -554,7 +562,7 @@ function ChatApp({ user, onLogout }: { user: User; onLogout: () => void }) {
           <header className="chat-header">
             <div className="chat-title">
               <strong>{activeAgent?.name || active?.title || "新对话"}</strong>
-              <span>{activeAgent ? "智能体运行模式" : "不保存后台聊天记录"}</span>
+              {activeAgent ? <span>智能体运行模式</span> : null}
             </div>
             <div className="chat-controls">
               {!active || active.kind === "chat" ? (

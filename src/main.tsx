@@ -151,8 +151,18 @@ async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
       ...options.headers
     }
   });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(payload.error || "请求失败");
+  const rawText = await response.text();
+  let payload: Record<string, unknown> = {};
+  try {
+    payload = rawText ? JSON.parse(rawText) : {};
+  } catch {
+    payload = {};
+  }
+  if (!response.ok) {
+    const detail = typeof payload.error === "string" ? payload.error : rawText.slice(0, 160);
+    throw new Error(detail || `接口返回 ${response.status} ${response.statusText}`);
+  }
+  if (!Object.keys(payload).length && rawText) throw new Error(`接口没有返回 JSON：${rawText.slice(0, 80)}`);
   return payload as T;
 }
 

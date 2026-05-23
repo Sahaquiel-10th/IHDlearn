@@ -46,7 +46,7 @@ npm install -g pm2
 ```bash
 mkdir -p /opt
 cd /opt
-git clone https://github.com/Sahaquiel-10th/Gplan.git gplan
+git clone https://github.com/Sahaquiel-10th/IHDlearn.git gplan
 cd /opt/gplan
 npm ci
 npm run build
@@ -110,3 +110,16 @@ npm run build
 pm2 restart gplan-ai
 ```
 
+## 8. 登录请求失败排查
+
+如果页面登录只显示“请求失败”，通常不是账号密码错误，而是浏览器没有拿到后端 JSON 响应。先在服务器上检查：
+
+```bash
+curl -s http://127.0.0.1:3001/api/health
+curl -i http://你的域名或IP/api/health
+pm2 status
+pm2 logs gplan-ai --lines 80
+nginx -t
+```
+
+`/api/health` 应该返回 `{"ok":true}`。如果公网地址返回 HTML、404、502 或没有响应，说明 Nginx 没有正确代理到 `127.0.0.1:3001`，或 Node 服务没有正常运行。

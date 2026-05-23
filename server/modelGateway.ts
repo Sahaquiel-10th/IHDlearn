@@ -10,6 +10,7 @@ export async function callModel(model: ModelConfig, messages: Message[], safetyR
   if (!model.enabled) throw new Error("模型未启用");
   if (!model.apiKey) throw new Error("模型缺少 API Key");
   if (model.kind === "image") return callImageModel(model, messages, safetyRules);
+  if (model.protocol === "anthropic") return callAnthropicModel(model, messages, safetyRules);
 
   const systemMessages: Message[] = [safetyRules, model.systemPrompt]
     .map((content) => content.trim())
@@ -51,6 +52,46 @@ export async function callModel(model: ModelConfig, messages: Message[], safetyR
   const content = payload?.choices?.[0]?.message?.content;
   if (typeof content !== "string") throw new Error("模型响应格式不正确");
   return { content, raw: payload };
+}
+
+async function callAnthropicModel(model: ModelConfig, messages: Message[], safetyRules = ""): Promise<ChatResult> {
+  const system = [safetyRules, model.systemPrompt].map((content) => content.trim()).filter(Boolean).join("\n\n");
+  const endpoint = `${model.baseUrl.replace(/\/$/, "")}/v1/messages`;
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "anthropic-version": "2023-06-01",
+      "x-api-key": model.apiKey,
+      Authorization: `Bearer ${model.apiKey}`
+    },
+    body: JSON.stringify({
+      model: model.model,
+      max_tokens: 4096,
+      temperature: 0.7,
+      ...(system ? { system } : {}),
+      messages: messages
+        .filter((message) => message.role !== "system")
+        .map((message) => ({
+          role: message.role === "assistant" ? "assistant" : "user",
+          content: message.content
+        }))
+    })
+  });
+
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = typeof payload?.error?.message === "string" ? payload.error.message : response.statusText;
+    throw new Error(`模型调用失败：${detail}`);
+  }
+
+  const text = Array.isArray(payload?.content)
+    ? payload.content
+        .map((part: { type?: string; text?: string }) => part.type === "text" && typeof part.text === "string" ? part.text : "")
+        .join("")
+    : "";
+  if (!text) throw new Error("Claude Messages 响应格式不正确");
+  return { content: text, raw: payload };
 }
 
 export function composeStepMessage(prompt: string, input: string) {

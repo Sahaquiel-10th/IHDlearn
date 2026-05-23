@@ -14,6 +14,7 @@ export type ModelConfig = {
   name: string;
   provider: string;
   kind: "chat" | "image";
+  protocol: "openai" | "anthropic";
   baseUrl: string;
   apiKey: string;
   model: string;

@@ -74,6 +74,14 @@ YYLX_API_KEY=你的yylx key，可不填，后续后台填
 
 当前代码会在 `DB_PROVIDER=mysql` 时使用 MySQL 的 `app_state` 表持久化数据；如果 MySQL 里没有数据，会优先把本地 `data/db.json` 导入进去。
 
+如果前端不是由 Node/Nginx 同域提供，而是放在 OSS/CDN 静态站点，构建前还需要配置前端 API 地址：
+
+```bash
+VITE_API_BASE_URL=http://114.55.168.249 npm run build
+```
+
+如果不配置，前端会默认请求当前域名下的 `/api/*`。放在 OSS/CDN 时，这些 POST 请求会打到静态资源服务，常见报错是 XML `MethodNotAllowed`。
+
 ## 5. 启动 Node
 
 ```bash

@@ -56,7 +56,7 @@ export async function callModel(model: ModelConfig, messages: Message[], safetyR
 
 async function callAnthropicModel(model: ModelConfig, messages: Message[], safetyRules = ""): Promise<ChatResult> {
   const system = [safetyRules, model.systemPrompt].map((content) => content.trim()).filter(Boolean).join("\n\n");
-  const endpoint = `${model.baseUrl.replace(/\/$/, "")}/v1/messages`;
+  const endpoint = `${anthropicBaseUrl(model.baseUrl)}/v1/messages`;
   const response = await fetch(endpoint, {
     method: "POST",
     headers: {
@@ -82,7 +82,8 @@ async function callAnthropicModel(model: ModelConfig, messages: Message[], safet
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
     const detail = typeof payload?.error?.message === "string" ? payload.error.message : response.statusText;
-    throw new Error(`模型调用失败：${detail}`);
+    const hint = response.status === 404 ? `${detail}。Claude Messages 的 Base URL 应填写根地址，例如 https://app.yylx.io。` : detail;
+    throw new Error(`模型调用失败：${hint}`);
   }
 
   const text = Array.isArray(payload?.content)
@@ -92,6 +93,14 @@ async function callAnthropicModel(model: ModelConfig, messages: Message[], safet
     : "";
   if (!text) throw new Error("Claude Messages 响应格式不正确");
   return { content: text, raw: payload };
+}
+
+function anthropicBaseUrl(baseUrl: string) {
+  return baseUrl
+    .trim()
+    .replace(/\/+$/, "")
+    .replace(/\/v1\/messages$/, "")
+    .replace(/\/v1$/, "");
 }
 
 export function composeStepMessage(prompt: string, input: string) {

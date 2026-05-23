@@ -140,12 +140,17 @@ type PreviewTrace =
     };
 
 const tokenKey = "enterprise-ai-token";
-const runtimeApiBase = (window as Window & { IHD_API_BASE_URL?: string }).IHD_API_BASE_URL || "";
-const apiBase = (runtimeApiBase || (import.meta as ImportMeta & { env?: Record<string, string> }).env?.VITE_API_BASE_URL || "").replace(/\/$/, "");
+const apiBaseKey = "ihd-api-base-url";
+
+function configuredApiBase() {
+  const runtimeApiBase = (window as Window & { IHD_API_BASE_URL?: string }).IHD_API_BASE_URL || "";
+  const buildApiBase = (import.meta as ImportMeta & { env?: Record<string, string> }).env?.VITE_API_BASE_URL || "";
+  return (localStorage.getItem(apiBaseKey) || runtimeApiBase || buildApiBase || "").replace(/\/$/, "");
+}
 
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = localStorage.getItem(tokenKey);
-  const response = await fetch(`${apiBase}${path}`, {
+  const response = await fetch(`${configuredApiBase()}${path}`, {
     ...options,
     headers: {
       "Content-Type": "application/json",
@@ -163,7 +168,7 @@ async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   if (!response.ok) {
     const detail =
       rawText.includes("MethodNotAllowed")
-        ? "登录请求打到了静态站点，不是后端 API。请在 ihd-config.js 里配置 window.IHD_API_BASE_URL 为后端地址。"
+        ? "登录请求打到了静态站点，不是后端 API。请填写正确的后端地址，或在 ihd-config.js 里配置 window.IHD_API_BASE_URL。"
         : typeof payload.error === "string"
           ? payload.error
           : rawText.slice(0, 160);
@@ -229,11 +234,15 @@ function renderHighlightedVariables(content: string) {
 function Login({ onDone }: { onDone: (user: User) => void }) {
   const [username, setUsername] = useState("IHD2025");
   const [password, setPassword] = useState("15658855442");
+  const [apiBaseDraft, setApiBaseDraft] = useState(configuredApiBase());
   const [error, setError] = useState("");
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     setError("");
+    const normalizedApiBase = apiBaseDraft.trim().replace(/\/$/, "");
+    if (normalizedApiBase) localStorage.setItem(apiBaseKey, normalizedApiBase);
+    else localStorage.removeItem(apiBaseKey);
     try {
       const result = await api<{ token: string; user: User }>("/api/auth/login", {
         method: "POST",
@@ -263,6 +272,15 @@ function Login({ onDone }: { onDone: (user: User) => void }) {
         <label>
           密码
           <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" autoComplete="current-password" />
+        </label>
+        <label>
+          后端地址
+          <input
+            value={apiBaseDraft}
+            onChange={(event) => setApiBaseDraft(event.target.value)}
+            placeholder="例如 http://114.55.168.249，留空表示同域 /api"
+            autoComplete="off"
+          />
         </label>
         {error ? <div className="error">{error}</div> : null}
         <button className="primary" type="submit"><KeyRound size={18} />登录</button>

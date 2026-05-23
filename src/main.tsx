@@ -140,7 +140,8 @@ type PreviewTrace =
     };
 
 const tokenKey = "enterprise-ai-token";
-const apiBase = ((import.meta as ImportMeta & { env?: Record<string, string> }).env?.VITE_API_BASE_URL || "").replace(/\/$/, "");
+const runtimeApiBase = (window as Window & { IHD_API_BASE_URL?: string }).IHD_API_BASE_URL || "";
+const apiBase = (runtimeApiBase || (import.meta as ImportMeta & { env?: Record<string, string> }).env?.VITE_API_BASE_URL || "").replace(/\/$/, "");
 
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const token = localStorage.getItem(tokenKey);
@@ -160,7 +161,12 @@ async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
     payload = {};
   }
   if (!response.ok) {
-    const detail = typeof payload.error === "string" ? payload.error : rawText.slice(0, 160);
+    const detail =
+      rawText.includes("MethodNotAllowed")
+        ? "登录请求打到了静态站点，不是后端 API。请在 ihd-config.js 里配置 window.IHD_API_BASE_URL 为后端地址。"
+        : typeof payload.error === "string"
+          ? payload.error
+          : rawText.slice(0, 160);
     throw new Error(detail || `接口返回 ${response.status} ${response.statusText}`);
   }
   if (!Object.keys(payload).length && rawText) throw new Error(`接口没有返回 JSON：${rawText.slice(0, 80)}`);

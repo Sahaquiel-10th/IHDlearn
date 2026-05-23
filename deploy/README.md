@@ -80,7 +80,19 @@ YYLX_API_KEY=你的yylx key，可不填，后续后台填
 VITE_API_BASE_URL=http://114.55.168.249 npm run build
 ```
 
+也可以在静态站点根目录放一个 `ihd-config.js`，不用重新打包：
+
+```js
+window.IHD_API_BASE_URL = "http://114.55.168.249";
+```
+
 如果不配置，前端会默认请求当前域名下的 `/api/*`。放在 OSS/CDN 时，这些 POST 请求会打到静态资源服务，常见报错是 XML `MethodNotAllowed`。
+
+后端如果和前端不是同一个域名，需要把前端域名写到 `.env` 的 `APP_ORIGIN`，多个域名用英文逗号隔开：
+
+```bash
+APP_ORIGIN=https://你的前端域名,http://114.55.168.249
+```
 
 ## 5. 启动 Node
 
@@ -131,3 +143,5 @@ nginx -t
 ```
 
 `/api/health` 应该返回 `{"ok":true}`。如果公网地址返回 HTML、404、502 或没有响应，说明 Nginx 没有正确代理到 `127.0.0.1:3001`，或 Node 服务没有正常运行。
+
+如果返回 XML `MethodNotAllowed`，说明请求打到了 OSS/CDN 静态站点，不是 Node 后端。修复方式是配置 `ihd-config.js` 或 `VITE_API_BASE_URL` 指向后端 API 地址。
